@@ -196,6 +196,7 @@ func (m model) handleDirChange(msg dirChangeMsg) model {
 	m.list.SetItems(items)
 	m.list.Title = titlePrefix + msg.path
 	m.list.ResetSelected()
+	m.list.ResetFilter()
 	return m
 }
 
