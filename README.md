@@ -1,2 +1,3 @@
-# cd-plus
-Change Directory Plus: A beautiful TUI tool of `cd` command. [Now Developing...]
+# path-cp
+
+Path CoPy: Copy path with Terminal User Interface

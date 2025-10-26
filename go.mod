@@ -1,4 +1,4 @@
-module gituhb.com/u-hossy/cd-plus
+module gituhb.com/u-hossy/path-cp
 
 go 1.25.3
 
