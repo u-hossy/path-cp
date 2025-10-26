@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"golang.design/x/clipboard"
 )
 
 const (
@@ -266,10 +266,6 @@ func (m model) View() string {
 }
 
 func run() error {
-	if err := clipboard.Init(); err != nil {
-		return fmt.Errorf("failed to initialize clipboard: %w", err)
-	}
-
 	m, err := newModel()
 	if err != nil {
 		return fmt.Errorf("failed to create model: %w", err)
@@ -282,7 +278,9 @@ func run() error {
 	}
 
 	if m, ok := finalModel.(model); ok && m.changeDir {
-		clipboard.Write(clipboard.FmtText, []byte(m.currentPath))
+		if err := clipboard.WriteAll(m.currentPath); err != nil {
+			return fmt.Errorf("failed to write to clipboard: %w", err)
+		}
 		fmt.Println(m.currentPath)
 	}
 
