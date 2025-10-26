@@ -10,7 +10,15 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+type mode string
+
+const (
+	ModeSelect mode = "select"
+	ModeSearch mode = "search"
+)
+
 type model struct {
+	mode        mode
 	cursor      int
 	currentPath string
 	entries     []fs.DirEntry
@@ -52,6 +60,7 @@ func initialModel() model {
 	sortedEntries = append(sortedEntries, files...)
 
 	return model{
+		mode:        ModeSelect,
 		currentPath: currentPath,
 		entries:     sortedEntries,
 		cursor:      0,
@@ -70,101 +79,115 @@ func (m model) Init() tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "q":
-			return m, tea.Quit
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-		case "down", "j":
-			if m.cursor < len(m.entries)-1 {
-				m.cursor++
-			}
-		case "enter", "l", "right":
-			if m.cursor < len(m.entries) {
-				entry := m.entries[m.cursor]
-				if entry.IsDir() {
-					var newPath string
-					if entry.Name() == ".." {
-						newPath = filepath.Dir(m.currentPath)
-					} else {
-						newPath = filepath.Join(m.currentPath, entry.Name())
-					}
-
-					entries, err := os.ReadDir(newPath)
-					if err != nil {
-						m.err = err
-						return m, nil
-					}
-
-					sortedEntries := make([]fs.DirEntry, 0, len(entries)+1)
-					sortedEntries = append(sortedEntries, &parentDirEntry{})
-
-					var dirs, files []fs.DirEntry
-					for _, e := range entries {
-						if e.IsDir() {
-							dirs = append(dirs, e)
-						} else {
-							files = append(files, e)
-						}
-					}
-
-					sort.Slice(dirs, func(i, j int) bool {
-						return dirs[i].Name() < dirs[j].Name()
-					})
-					sort.Slice(files, func(i, j int) bool {
-						return files[i].Name() < files[j].Name()
-					})
-
-					sortedEntries = append(sortedEntries, dirs...)
-					sortedEntries = append(sortedEntries, files...)
-
-					m.currentPath = newPath
-					m.entries = sortedEntries
-					m.cursor = 0
-					m.err = nil
+	switch m.mode {
+	case ModeSelect:
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "/":
+				m.mode = ModeSearch
+				return m, nil
+			case "ctrl+c", "q":
+				return m, tea.Quit
+			case "up", "k":
+				if m.cursor > 0 {
+					m.cursor--
 				}
+			case "down", "j":
+				if m.cursor < len(m.entries)-1 {
+					m.cursor++
+				}
+			case "enter", "l", "right":
+				if m.cursor < len(m.entries) {
+					entry := m.entries[m.cursor]
+					if entry.IsDir() {
+						var newPath string
+						if entry.Name() == ".." {
+							newPath = filepath.Dir(m.currentPath)
+						} else {
+							newPath = filepath.Join(m.currentPath, entry.Name())
+						}
+
+						entries, err := os.ReadDir(newPath)
+						if err != nil {
+							m.err = err
+							return m, nil
+						}
+
+						sortedEntries := make([]fs.DirEntry, 0, len(entries)+1)
+						sortedEntries = append(sortedEntries, &parentDirEntry{})
+
+						var dirs, files []fs.DirEntry
+						for _, e := range entries {
+							if e.IsDir() {
+								dirs = append(dirs, e)
+							} else {
+								files = append(files, e)
+							}
+						}
+
+						sort.Slice(dirs, func(i, j int) bool {
+							return dirs[i].Name() < dirs[j].Name()
+						})
+						sort.Slice(files, func(i, j int) bool {
+							return files[i].Name() < files[j].Name()
+						})
+
+						sortedEntries = append(sortedEntries, dirs...)
+						sortedEntries = append(sortedEntries, files...)
+
+						m.currentPath = newPath
+						m.entries = sortedEntries
+						m.cursor = 0
+						m.err = nil
+					}
+				}
+			case "h", "left":
+				newPath := filepath.Dir(m.currentPath)
+				entries, err := os.ReadDir(newPath)
+				if err != nil {
+					m.err = err
+					return m, nil
+				}
+
+				sortedEntries := make([]fs.DirEntry, 0, len(entries)+1)
+				sortedEntries = append(sortedEntries, &parentDirEntry{})
+
+				var dirs, files []fs.DirEntry
+				for _, e := range entries {
+					if e.IsDir() {
+						dirs = append(dirs, e)
+					} else {
+						files = append(files, e)
+					}
+				}
+
+				sort.Slice(dirs, func(i, j int) bool {
+					return dirs[i].Name() < dirs[j].Name()
+				})
+				sort.Slice(files, func(i, j int) bool {
+					return files[i].Name() < files[j].Name()
+				})
+
+				sortedEntries = append(sortedEntries, dirs...)
+				sortedEntries = append(sortedEntries, files...)
+
+				m.currentPath = newPath
+				m.entries = sortedEntries
+				m.cursor = 0
+				m.err = nil
 			}
-		case "h", "left":
-			newPath := filepath.Dir(m.currentPath)
-			entries, err := os.ReadDir(newPath)
-			if err != nil {
-				m.err = err
+		}
+	case ModeSearch:
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "esc":
+				m.mode = ModeSelect
 				return m, nil
 			}
-
-			sortedEntries := make([]fs.DirEntry, 0, len(entries)+1)
-			sortedEntries = append(sortedEntries, &parentDirEntry{})
-
-			var dirs, files []fs.DirEntry
-			for _, e := range entries {
-				if e.IsDir() {
-					dirs = append(dirs, e)
-				} else {
-					files = append(files, e)
-				}
-			}
-
-			sort.Slice(dirs, func(i, j int) bool {
-				return dirs[i].Name() < dirs[j].Name()
-			})
-			sort.Slice(files, func(i, j int) bool {
-				return files[i].Name() < files[j].Name()
-			})
-
-			sortedEntries = append(sortedEntries, dirs...)
-			sortedEntries = append(sortedEntries, files...)
-
-			m.currentPath = newPath
-			m.entries = sortedEntries
-			m.cursor = 0
-			m.err = nil
 		}
 	}
-
 	return m, nil
 }
 
