@@ -2,26 +2,65 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
-type mode string
-
-const (
-	ModeSelect mode = "select"
-	ModeSearch mode = "search"
+var (
+	itemStyle         = lipgloss.NewStyle().PaddingLeft(2)
+	selectedItemStyle = lipgloss.NewStyle().PaddingLeft(0).Foreground(lipgloss.Color("170"))
 )
+
+type itemDelegate struct{}
+
+func (d itemDelegate) Height() int                             { return 1 }
+func (d itemDelegate) Spacing() int                            { return 0 }
+func (d itemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
+func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	item, ok := listItem.(dirEntry)
+	if !ok {
+		return
+	}
+
+	icon := "📄"
+	if item.entry.IsDir() {
+		if item.entry.Name() == ".." {
+			icon = "⬆️ "
+		} else {
+			icon = "📁"
+		}
+	}
+
+	str := fmt.Sprintf("%s %s", icon, item.entry.Name())
+
+	fn := itemStyle.Render
+	if index == m.Index() {
+		fn = func(s ...string) string {
+			return selectedItemStyle.Render("> " + s[0])
+		}
+	}
+
+	fmt.Fprint(w, fn(str))
+}
+
+type dirEntry struct {
+	entry fs.DirEntry
+}
+
+func (d dirEntry) FilterValue() string {
+	return d.entry.Name()
+}
 
 type model struct {
-	mode        mode
-	cursor      int
 	currentPath string
-	entries     []fs.DirEntry
+	list        list.Model
 	err         error
 }
 
@@ -36,8 +75,25 @@ func initialModel() model {
 		return model{err: err, currentPath: currentPath}
 	}
 
-	sortedEntries := make([]fs.DirEntry, 0, len(entries)+1)
+	items := makeListItems(entries)
 
+	delegate := itemDelegate{}
+	l := list.New(items, delegate, 0, 0)
+	l.Title = "📁 " + currentPath
+	l.SetShowStatusBar(false)
+	l.SetFilteringEnabled(true)
+	l.Styles.Title = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("62")).
+		Bold(true)
+
+	return model{
+		currentPath: currentPath,
+		list:        l,
+	}
+}
+
+func makeListItems(entries []fs.DirEntry) []list.Item {
+	sortedEntries := make([]fs.DirEntry, 0, len(entries)+1)
 	sortedEntries = append(sortedEntries, &parentDirEntry{})
 
 	var dirs, files []fs.DirEntry
@@ -59,12 +115,11 @@ func initialModel() model {
 	sortedEntries = append(sortedEntries, dirs...)
 	sortedEntries = append(sortedEntries, files...)
 
-	return model{
-		mode:        ModeSelect,
-		currentPath: currentPath,
-		entries:     sortedEntries,
-		cursor:      0,
+	items := make([]list.Item, len(sortedEntries))
+	for i, entry := range sortedEntries {
+		items[i] = dirEntry{entry: entry}
 	}
+	return items
 }
 
 type parentDirEntry struct{}
@@ -79,116 +134,78 @@ func (m model) Init() tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch m.mode {
-	case ModeSelect:
-		switch msg := msg.(type) {
-		case tea.KeyMsg:
-			switch msg.String() {
-			case "/":
-				m.mode = ModeSearch
-				return m, nil
-			case "ctrl+c", "q":
-				return m, tea.Quit
-			case "up", "k":
-				if m.cursor > 0 {
-					m.cursor--
-				}
-			case "down", "j":
-				if m.cursor < len(m.entries)-1 {
-					m.cursor++
-				}
-			case "enter", "l", "right":
-				if m.cursor < len(m.entries) {
-					entry := m.entries[m.cursor]
-					if entry.IsDir() {
-						var newPath string
-						if entry.Name() == ".." {
-							newPath = filepath.Dir(m.currentPath)
-						} else {
-							newPath = filepath.Join(m.currentPath, entry.Name())
-						}
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.list.SetWidth(msg.Width)
+		m.list.SetHeight(msg.Height - 2)
+		return m, nil
 
-						entries, err := os.ReadDir(newPath)
-						if err != nil {
-							m.err = err
-							return m, nil
-						}
+	case dirChangeMsg:
+		m.currentPath = msg.path
+		items := makeListItems(msg.entries)
+		m.list.SetItems(items)
+		m.list.Title = "📁 " + msg.path
+		m.list.ResetSelected()
+		return m, nil
 
-						sortedEntries := make([]fs.DirEntry, 0, len(entries)+1)
-						sortedEntries = append(sortedEntries, &parentDirEntry{})
+	case errMsg:
+		m.err = msg.err
+		return m, nil
 
-						var dirs, files []fs.DirEntry
-						for _, e := range entries {
-							if e.IsDir() {
-								dirs = append(dirs, e)
-							} else {
-								files = append(files, e)
-							}
-						}
-
-						sort.Slice(dirs, func(i, j int) bool {
-							return dirs[i].Name() < dirs[j].Name()
-						})
-						sort.Slice(files, func(i, j int) bool {
-							return files[i].Name() < files[j].Name()
-						})
-
-						sortedEntries = append(sortedEntries, dirs...)
-						sortedEntries = append(sortedEntries, files...)
-
-						m.currentPath = newPath
-						m.entries = sortedEntries
-						m.cursor = 0
-						m.err = nil
-					}
-				}
-			case "h", "left":
-				newPath := filepath.Dir(m.currentPath)
-				entries, err := os.ReadDir(newPath)
-				if err != nil {
-					m.err = err
-					return m, nil
-				}
-
-				sortedEntries := make([]fs.DirEntry, 0, len(entries)+1)
-				sortedEntries = append(sortedEntries, &parentDirEntry{})
-
-				var dirs, files []fs.DirEntry
-				for _, e := range entries {
-					if e.IsDir() {
-						dirs = append(dirs, e)
-					} else {
-						files = append(files, e)
-					}
-				}
-
-				sort.Slice(dirs, func(i, j int) bool {
-					return dirs[i].Name() < dirs[j].Name()
-				})
-				sort.Slice(files, func(i, j int) bool {
-					return files[i].Name() < files[j].Name()
-				})
-
-				sortedEntries = append(sortedEntries, dirs...)
-				sortedEntries = append(sortedEntries, files...)
-
-				m.currentPath = newPath
-				m.entries = sortedEntries
-				m.cursor = 0
-				m.err = nil
-			}
+	case tea.KeyMsg:
+		if msg.String() == "ctrl+c" || msg.String() == "q" {
+			return m, tea.Quit
 		}
-	case ModeSearch:
-		switch msg := msg.(type) {
-		case tea.KeyMsg:
-			switch msg.String() {
-			case "esc":
-				m.mode = ModeSelect
-				return m, nil
+
+		switch msg.String() {
+		case "enter", "l", "right":
+			selectedItem := m.list.SelectedItem()
+			if selectedItem != nil {
+				entry := selectedItem.(dirEntry).entry
+				if entry.IsDir() {
+					return m, m.changeDirectory(entry.Name())
+				}
 			}
+			return m, nil
+
+		case "h", "left":
+			return m, m.changeDirectory("..")
 		}
 	}
-	return m, nil
+
+	var cmd tea.Cmd
+	m.list, cmd = m.list.Update(msg)
+	return m, cmd
+}
+
+func (m model) changeDirectory(dirname string) tea.Cmd {
+	return func() tea.Msg {
+		var newPath string
+		if dirname == ".." {
+			newPath = filepath.Dir(m.currentPath)
+		} else {
+			newPath = filepath.Join(m.currentPath, dirname)
+		}
+
+		entries, err := os.ReadDir(newPath)
+		if err != nil {
+			return errMsg{err}
+		}
+
+		return dirChangeMsg{
+			path:    newPath,
+			entries: entries,
+		}
+	}
+}
+
+type errMsg struct {
+	err error
+}
+
+type dirChangeMsg struct {
+	path    string
+	entries []fs.DirEntry
 }
 
 func (m model) View() string {
@@ -196,31 +213,7 @@ func (m model) View() string {
 		return fmt.Sprintf("Error: %v\n\nPress q to quit.\n", m.err)
 	}
 
-	s := fmt.Sprintf("📁 Current Directory: %s\n\n", m.currentPath)
-
-	for i, entry := range m.entries {
-		cursor := " "
-		if m.cursor == i {
-			cursor = ">"
-		}
-
-		icon := "📄"
-		if entry.IsDir() {
-			if entry.Name() == ".." {
-				icon = "⬆️ "
-			} else {
-				icon = "📁"
-			}
-		}
-
-		s += fmt.Sprintf("%s %s %s\n", cursor, icon, entry.Name())
-	}
-
-	s += "\n"
-	s += "Navigation: ↑/k (up) ↓/j (down) Enter/l/→ (enter dir) h/← (parent dir)\n"
-	s += "Press q to quit.\n"
-
-	return s
+	return m.list.View()
 }
 
 func main() {
