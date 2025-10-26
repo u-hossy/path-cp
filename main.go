@@ -14,42 +14,21 @@ import (
 	"golang.design/x/clipboard"
 )
 
+const (
+	iconParentDir = "⬆️ "
+	iconDirectory = "📁"
+	iconFile      = "📄"
+	iconCurrent   = "> "
+
+	titlePrefix = "📁 "
+	titleColor  = "62"
+)
+
 var (
 	itemStyle         = lipgloss.NewStyle().PaddingLeft(2)
 	selectedItemStyle = lipgloss.NewStyle().PaddingLeft(0).Foreground(lipgloss.Color("170"))
+	titleStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color(titleColor)).Bold(true)
 )
-
-type itemDelegate struct{}
-
-func (d itemDelegate) Height() int                             { return 1 }
-func (d itemDelegate) Spacing() int                            { return 0 }
-func (d itemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
-func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
-	item, ok := listItem.(dirEntry)
-	if !ok {
-		return
-	}
-
-	icon := "📄"
-	if item.entry.IsDir() {
-		if item.entry.Name() == ".." {
-			icon = "⬆️ "
-		} else {
-			icon = "📁"
-		}
-	}
-
-	str := fmt.Sprintf("%s %s", icon, item.entry.Name())
-
-	fn := itemStyle.Render
-	if index == m.Index() {
-		fn = func(s ...string) string {
-			return selectedItemStyle.Render("> " + s[0])
-		}
-	}
-
-	fmt.Fprint(w, fn(str))
-}
 
 type dirEntry struct {
 	entry fs.DirEntry
@@ -59,70 +38,14 @@ func (d dirEntry) FilterValue() string {
 	return d.entry.Name()
 }
 
-type model struct {
-	currentPath string
-	list        list.Model
-	err         error
-	quitting    bool
-	changeDir   bool
-}
-
-func initialModel() model {
-	currentPath, err := os.Getwd()
-	if err != nil {
-		return model{err: err}
+func (d dirEntry) icon() string {
+	if !d.entry.IsDir() {
+		return iconFile
 	}
-
-	entries, err := os.ReadDir(currentPath)
-	if err != nil {
-		return model{err: err, currentPath: currentPath}
+	if d.entry.Name() == ".." {
+		return iconParentDir
 	}
-
-	items := makeListItems(entries)
-
-	delegate := itemDelegate{}
-	l := list.New(items, delegate, 0, 0)
-	l.Title = "📁 " + currentPath
-	l.SetShowStatusBar(false)
-	l.SetFilteringEnabled(true)
-	l.Styles.Title = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("62")).
-		Bold(true)
-
-	return model{
-		currentPath: currentPath,
-		list:        l,
-	}
-}
-
-func makeListItems(entries []fs.DirEntry) []list.Item {
-	sortedEntries := make([]fs.DirEntry, 0, len(entries)+1)
-	sortedEntries = append(sortedEntries, &parentDirEntry{})
-
-	var dirs, files []fs.DirEntry
-	for _, entry := range entries {
-		if entry.IsDir() {
-			dirs = append(dirs, entry)
-		} else {
-			files = append(files, entry)
-		}
-	}
-
-	sort.Slice(dirs, func(i, j int) bool {
-		return dirs[i].Name() < dirs[j].Name()
-	})
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Name() < files[j].Name()
-	})
-
-	sortedEntries = append(sortedEntries, dirs...)
-	sortedEntries = append(sortedEntries, files...)
-
-	items := make([]list.Item, len(sortedEntries))
-	for i, entry := range sortedEntries {
-		items[i] = dirEntry{entry: entry}
-	}
-	return items
+	return iconDirectory
 }
 
 type parentDirEntry struct{}
@@ -132,6 +55,113 @@ func (p *parentDirEntry) IsDir() bool                { return true }
 func (p *parentDirEntry) Type() fs.FileMode          { return fs.ModeDir }
 func (p *parentDirEntry) Info() (fs.FileInfo, error) { return nil, nil }
 
+type itemDelegate struct{}
+
+func (d itemDelegate) Height() int  { return 1 }
+func (d itemDelegate) Spacing() int { return 0 }
+func (d itemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd {
+	return nil
+}
+
+func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	item, ok := listItem.(dirEntry)
+	if !ok {
+		return
+	}
+
+	str := fmt.Sprintf("%s %s", item.icon(), item.entry.Name())
+
+	if index == m.Index() {
+		fmt.Fprint(w, selectedItemStyle.Render(iconCurrent+str))
+		return
+	}
+	fmt.Fprint(w, itemStyle.Render(str))
+}
+
+type model struct {
+	currentPath string
+	list        list.Model
+	err         error
+	changeDir   bool
+}
+
+type errMsg struct {
+	err error
+}
+
+type dirChangeMsg struct {
+	path    string
+	entries []fs.DirEntry
+}
+
+func newModel() (model, error) {
+	currentPath, err := os.Getwd()
+	if err != nil {
+		return model{}, err
+	}
+
+	entries, err := os.ReadDir(currentPath)
+	if err != nil {
+		return model{}, err
+	}
+
+	items := createListItems(entries)
+	l := createList(items, currentPath)
+
+	return model{
+		currentPath: currentPath,
+		list:        l,
+	}, nil
+}
+
+func createList(items []list.Item, path string) list.Model {
+	l := list.New(items, itemDelegate{}, 0, 0)
+	l.Title = titlePrefix + path
+	l.SetShowStatusBar(false)
+	l.SetFilteringEnabled(true)
+	l.Styles.Title = titleStyle
+	return l
+}
+
+func createListItems(entries []fs.DirEntry) []list.Item {
+	dirs, files := partitionEntries(entries)
+
+	sortByName(dirs)
+	sortByName(files)
+
+	sortedEntries := make([]fs.DirEntry, 0, len(entries)+1)
+	sortedEntries = append(sortedEntries, &parentDirEntry{})
+	sortedEntries = append(sortedEntries, dirs...)
+	sortedEntries = append(sortedEntries, files...)
+
+	return convertToListItems(sortedEntries)
+}
+
+func partitionEntries(entries []fs.DirEntry) (dirs, files []fs.DirEntry) {
+	for _, entry := range entries {
+		if entry.IsDir() {
+			dirs = append(dirs, entry)
+		} else {
+			files = append(files, entry)
+		}
+	}
+	return dirs, files
+}
+
+func sortByName(entries []fs.DirEntry) {
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
+}
+
+func convertToListItems(entries []fs.DirEntry) []list.Item {
+	items := make([]list.Item, len(entries))
+	for i, entry := range entries {
+		items[i] = dirEntry{entry: entry}
+	}
+	return items
+}
+
 func (m model) Init() tea.Cmd {
 	return tea.SetWindowTitle("cd-plus - Interactive Directory Navigator")
 }
@@ -139,49 +169,14 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.list.SetWidth(msg.Width)
-		m.list.SetHeight(msg.Height - 2)
-		return m, nil
-
+		return m.handleWindowResize(msg), nil
 	case dirChangeMsg:
-		m.currentPath = msg.path
-		items := makeListItems(msg.entries)
-		m.list.SetItems(items)
-		m.list.Title = "📁 " + msg.path
-		m.list.ResetSelected()
-		return m, nil
-
+		return m.handleDirChange(msg), nil
 	case errMsg:
 		m.err = msg.err
 		return m, nil
-
 	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" {
-			m.quitting = true
-			m.changeDir = false
-			return m, tea.Quit
-		}
-
-		if msg.String() == "q" || msg.String() == "esc" {
-			m.quitting = true
-			m.changeDir = true
-			return m, tea.Quit
-		}
-
-		switch msg.String() {
-		case "enter", "l", "right":
-			selectedItem := m.list.SelectedItem()
-			if selectedItem != nil {
-				entry := selectedItem.(dirEntry).entry
-				if entry.IsDir() {
-					return m, m.changeDirectory(entry.Name())
-				}
-			}
-			return m, nil
-
-		case "h", "left":
-			return m, m.changeDirectory("..")
-		}
+		return m.handleKeyPress(msg)
 	}
 
 	var cmd tea.Cmd
@@ -189,15 +184,57 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) changeDirectory(dirname string) tea.Cmd {
-	return func() tea.Msg {
-		var newPath string
-		if dirname == ".." {
-			newPath = filepath.Dir(m.currentPath)
-		} else {
-			newPath = filepath.Join(m.currentPath, dirname)
-		}
+func (m model) handleWindowResize(msg tea.WindowSizeMsg) model {
+	m.list.SetWidth(msg.Width)
+	m.list.SetHeight(msg.Height - 2)
+	return m
+}
 
+func (m model) handleDirChange(msg dirChangeMsg) model {
+	m.currentPath = msg.path
+	items := createListItems(msg.entries)
+	m.list.SetItems(items)
+	m.list.Title = titlePrefix + msg.path
+	m.list.ResetSelected()
+	return m
+}
+
+func (m model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		m.changeDir = false
+		return m, tea.Quit
+	case "q", "esc":
+		m.changeDir = true
+		return m, tea.Quit
+	case "enter", "l", "right":
+		return m.handleEnterDirectory()
+	case "h", "left":
+		return m, m.navigateToParent()
+	}
+
+	var cmd tea.Cmd
+	m.list, cmd = m.list.Update(msg)
+	return m, cmd
+}
+
+func (m model) handleEnterDirectory() (tea.Model, tea.Cmd) {
+	selectedItem := m.list.SelectedItem()
+	if selectedItem == nil {
+		return m, nil
+	}
+
+	entry := selectedItem.(dirEntry).entry
+	if !entry.IsDir() {
+		return m, nil
+	}
+
+	return m, m.navigateTo(entry.Name())
+}
+
+func (m model) navigateTo(dirname string) tea.Cmd {
+	return func() tea.Msg {
+		newPath := m.resolveNewPath(dirname)
 		entries, err := os.ReadDir(newPath)
 		if err != nil {
 			return errMsg{err}
@@ -210,40 +247,51 @@ func (m model) changeDirectory(dirname string) tea.Cmd {
 	}
 }
 
-type errMsg struct {
-	err error
+func (m model) navigateToParent() tea.Cmd {
+	return m.navigateTo("..")
 }
 
-type dirChangeMsg struct {
-	path    string
-	entries []fs.DirEntry
+func (m model) resolveNewPath(dirname string) string {
+	if dirname == ".." {
+		return filepath.Dir(m.currentPath)
+	}
+	return filepath.Join(m.currentPath, dirname)
 }
 
 func (m model) View() string {
 	if m.err != nil {
 		return fmt.Sprintf("Error: %v\n\nPress q to quit.\n", m.err)
 	}
-
 	return m.list.View()
 }
 
-func main() {
-	// Initialize clipboard
-	err := clipboard.Init()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize clipboard: %v\n", err)
-		os.Exit(1)
+func run() error {
+	if err := clipboard.Init(); err != nil {
+		return fmt.Errorf("failed to initialize clipboard: %w", err)
 	}
 
-	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+	m, err := newModel()
+	if err != nil {
+		return fmt.Errorf("failed to create model: %w", err)
+	}
+
+	p := tea.NewProgram(m, tea.WithAltScreen())
 	finalModel, err := p.Run()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error running program: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error running program: %w", err)
 	}
 
 	if m, ok := finalModel.(model); ok && m.changeDir {
 		clipboard.Write(clipboard.FmtText, []byte(m.currentPath))
 		fmt.Println(m.currentPath)
+	}
+
+	return nil
+}
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 }
