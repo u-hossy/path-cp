@@ -201,6 +201,12 @@ func (m model) handleDirChange(msg dirChangeMsg) model {
 }
 
 func (m model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.list.FilterState() == list.Filtering {
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(msg)
+		return m, cmd
+	}
+
 	switch msg.String() {
 	case "ctrl+c":
 		m.changeDir = false
