@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"golang.design/x/clipboard"
 )
 
 var (
@@ -62,6 +63,8 @@ type model struct {
 	currentPath string
 	list        list.Model
 	err         error
+	quitting    bool
+	changeDir   bool
 }
 
 func initialModel() model {
@@ -153,7 +156,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" || msg.String() == "q" {
+		if msg.String() == "ctrl+c" {
+			m.quitting = true
+			m.changeDir = false
+			return m, tea.Quit
+		}
+
+		if msg.String() == "q" || msg.String() == "esc" {
+			m.quitting = true
+			m.changeDir = true
 			return m, tea.Quit
 		}
 
@@ -217,9 +228,22 @@ func (m model) View() string {
 }
 
 func main() {
-	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
-		fmt.Printf("Error running program: %v", err)
+	// Initialize clipboard
+	err := clipboard.Init()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize clipboard: %v\n", err)
 		os.Exit(1)
+	}
+
+	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+	finalModel, err := p.Run()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error running program: %v\n", err)
+		os.Exit(1)
+	}
+
+	if m, ok := finalModel.(model); ok && m.changeDir {
+		clipboard.Write(clipboard.FmtText, []byte(m.currentPath))
+		fmt.Println(m.currentPath)
 	}
 }
