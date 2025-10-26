@@ -211,7 +211,7 @@ func (m model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		m.changeDir = false
 		return m, tea.Quit
-	case "q", "esc":
+	case "q":
 		m.changeDir = true
 		return m, tea.Quit
 	case "enter", "l", "right":
