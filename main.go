@@ -20,14 +20,17 @@ const (
 	iconFile      = "📄"
 	iconCurrent   = "> "
 
-	titlePrefix = "📁 "
-	titleColor  = "62"
+	titlePrefix   = "📁 "
+	titleColor    = "62"
+	selectedColor = "170"
+	helpColor     = "241"
 )
 
 var (
 	itemStyle         = lipgloss.NewStyle().PaddingLeft(2)
-	selectedItemStyle = lipgloss.NewStyle().PaddingLeft(0).Foreground(lipgloss.Color("170"))
+	selectedItemStyle = lipgloss.NewStyle().PaddingLeft(0).Foreground(lipgloss.Color(selectedColor))
 	titleStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color(titleColor)).Bold(true)
+	helpStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color(helpColor)).Padding(1, 0, 0, 2)
 )
 
 type dirEntry struct {
@@ -79,10 +82,12 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 }
 
 type model struct {
+	initialPath string
 	currentPath string
 	list        list.Model
 	err         error
 	copyPath    bool
+	copyFormat  string
 }
 
 type errMsg struct {
@@ -109,6 +114,7 @@ func newModel() (model, error) {
 	l := createList(items, currentPath)
 
 	return model{
+		initialPath: currentPath,
 		currentPath: currentPath,
 		list:        l,
 	}, nil
@@ -208,15 +214,32 @@ func (m model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
-	case "ctrl+c":
+	case "ctrl+c", "q":
 		m.copyPath = false
 		return m, tea.Quit
-	case "q":
+	case "f":
 		m.copyPath = true
+		m.copyFormat = "f"
 		return m, tea.Quit
-	case "enter", "l", "right":
+	case "r":
+		m.copyPath = true
+		m.copyFormat = "r"
+		return m, tea.Quit
+	case "a":
+		m.copyPath = true
+		m.copyFormat = "a"
+		return m, tea.Quit
+	case "d":
+		m.copyPath = true
+		m.copyFormat = "d"
+		return m, tea.Quit
+	case "p":
+		m.copyPath = true
+		m.copyFormat = "p"
+		return m, tea.Quit
+	case "enter", " ", "l", "right":
 		return m.handleEnterDirectory()
-	case "h", "left":
+	case "backspace", "h", "left":
 		return m, m.navigateToParent()
 	}
 
@@ -269,7 +292,81 @@ func (m model) View() string {
 	if m.err != nil {
 		return fmt.Sprintf("Error: %v\n\nPress q to quit.\n", m.err)
 	}
-	return m.list.View()
+
+	helpText := helpStyle.Render(
+		"Copy: f (file) • r (relative) • a (absolute) • d (directory path) • p (`$HOME` format)",
+	)
+
+	return m.list.View() + "\n" + helpText
+}
+
+func (m model) getSelectedPath() string {
+	selectedItem := m.list.SelectedItem()
+	if selectedItem == nil {
+		return m.currentPath
+	}
+
+	entry := selectedItem.(dirEntry).entry
+	if entry.Name() == ".." {
+		return m.currentPath
+	}
+
+	return filepath.Join(m.currentPath, entry.Name())
+}
+
+func (m model) getFormattedPath() (string, error) {
+	selectedPath := m.getSelectedPath()
+
+	switch m.copyFormat {
+	case "f":
+		return filepath.Base(selectedPath), nil
+
+	case "r":
+		relPath, err := filepath.Rel(m.initialPath, selectedPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to get relative path: %w", err)
+		}
+		return relPath, nil
+
+	case "a":
+		absPath, err := filepath.Abs(selectedPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to get absolute path: %w", err)
+		}
+		return absPath, nil
+
+	case "d":
+		absPath, err := filepath.Abs(selectedPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to get absolute path: %w", err)
+		}
+		if info, err := os.Stat(absPath); err == nil && !info.IsDir() {
+			return filepath.Dir(absPath), nil
+		}
+		return absPath, nil
+
+	case "p":
+		absPath, err := filepath.Abs(selectedPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to get absolute path: %w", err)
+		}
+		dirPath := absPath
+		if info, err := os.Stat(absPath); err == nil && !info.IsDir() {
+			dirPath = filepath.Dir(absPath)
+		}
+
+		homeDir, err := os.UserHomeDir()
+		if err == nil {
+			relPath, err := filepath.Rel(homeDir, dirPath)
+			if err == nil && !filepath.IsAbs(relPath) && len(relPath) > 0 && relPath[0] != '.' {
+				return filepath.Join("$HOME", relPath), nil
+			}
+		}
+		return dirPath, nil
+
+	default:
+		return selectedPath, nil
+	}
 }
 
 func run() error {
@@ -285,10 +382,15 @@ func run() error {
 	}
 
 	if m, ok := finalModel.(model); ok && m.copyPath {
-		if err := clipboard.WriteAll(m.currentPath); err != nil {
+		pathToCopy, err := m.getFormattedPath()
+		if err != nil {
+			return fmt.Errorf("failed to format path: %w", err)
+		}
+
+		if err := clipboard.WriteAll(pathToCopy); err != nil {
 			return fmt.Errorf("failed to write to clipboard: %w", err)
 		}
-		fmt.Println(m.currentPath)
+		fmt.Println(pathToCopy)
 	}
 
 	return nil
