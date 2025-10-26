@@ -82,7 +82,7 @@ type model struct {
 	currentPath string
 	list        list.Model
 	err         error
-	changeDir   bool
+	copyPath    bool
 }
 
 type errMsg struct {
@@ -209,10 +209,10 @@ func (m model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "ctrl+c":
-		m.changeDir = false
+		m.copyPath = false
 		return m, tea.Quit
 	case "q":
-		m.changeDir = true
+		m.copyPath = true
 		return m, tea.Quit
 	case "enter", "l", "right":
 		return m.handleEnterDirectory()
@@ -284,7 +284,7 @@ func run() error {
 		return fmt.Errorf("error running program: %w", err)
 	}
 
-	if m, ok := finalModel.(model); ok && m.changeDir {
+	if m, ok := finalModel.(model); ok && m.copyPath {
 		if err := clipboard.WriteAll(m.currentPath); err != nil {
 			return fmt.Errorf("failed to write to clipboard: %w", err)
 		}
